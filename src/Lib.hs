@@ -7,6 +7,10 @@ import Data.Int
 import Data.Proxy
 import Data.Type.Equality
 import Control.Monad.IO.Class
+import Data.Set
+import Data.Map
+
+type Party = String
 
 -----------------
 -- MPC Classes --
@@ -14,15 +18,19 @@ import Control.Monad.IO.Class
 
 ---- INS: TODO: What's the right thing to do about the monadic effects?
 
+class Monad m ⇒ MonadMPC m where
+  everyone ∷ m (Set Party)
+  me       ∷ m Party
+
 -------------------------------
 --- Encryption / Decryption ---
 -------------------------------
 
 ---- Encrypt type `s` according to protocol `p`
 class EncDec p s where
-  enc   ∷ (Monad m) ⇒ s → m [p s]
-  dec   ∷ (Monad m) ⇒ [p s] → m s
-  embed ∷ (Monad m) ⇒ s → m (p s)
+  enc   ∷ (MonadMPC m) ⇒ s → m (Map Party (p s))
+  dec   ∷ (MonadMPC m) ⇒ (Map Party (p s)) → m s
+  embed ∷ (MonadMPC m) ⇒ s → m (p s)
 
 -----------------------------------
 --- Addition / Group Operations ---
@@ -30,15 +38,15 @@ class EncDec p s where
 
 ---- Additive Identity (0)
 class (EncDec p s) ⇒ MPCAddId p s where
-  addId ∷ (Monad m) ⇒ m (p s)
+  addId ∷ m (p s)
 
 ---- Additive Inverse (-a)
 class (EncDec p s) ⇒ MPCAddInv p s where
-  addInv ∷ (Monad m) ⇒ p s → m (p s)
+  addInv ∷ (MonadMPC m) ⇒ p s → m (p s)
 
 ---- Addition (a + b)
 class (EncDec p s) ⇒ MPCAdd p s where
-  add ∷ (Monad m) ⇒ p s → p s → m (p s)
+  add ∷ (MonadMPC m) ⇒ p s → p s → m (p s)
 
 ---- Group Operations
 class (MPCAddId p s, MPCAddInv p s, MPCAdd p s) ⇒ MPCGroup p s
@@ -49,15 +57,15 @@ class (MPCAddId p s, MPCAddInv p s, MPCAdd p s) ⇒ MPCGroup p s
 
 ---- Multiplicative Identity (1)
 class (EncDec p s) ⇒ MPCMulId p s where
-  mulId ∷ (Monad m) ⇒ m (p s)
+  mulId ∷ (MonadMPC m) ⇒ m (p s)
 
 ---- Multiplicative Inverse (1/a)
 class (EncDec p s) ⇒ MPCMulInv p s where
-  mulInv ∷ (Monad m) ⇒ p s → m (p s)
+  mulInv ∷ (MonadMPC m) ⇒ p s → m (p s)
 
 ---- Multiplication (a * b)
 class (EncDec p s) ⇒ MPCMul p s where
-  mul ∷ (Monad m) ⇒ p s → p s → m (p s)
+  mul ∷ (MonadMPC m) ⇒ p s → p s → m (p s)
 
 ---- Ring Operations
 class (MPCGroup p s, MPCMulId  p s, MPCMul p s) ⇒ MPCRing  p s
@@ -71,7 +79,7 @@ class (MPCRing  p s, MPCMulInv p s)             ⇒ MPCField p s
 
 ---- Convert from a to b (a ⊑ b)
 class (EncDec p a, EncDec p b) ⇒ MPCConv p a b where
-  conv ∷ (Monad m) ⇒ p a → m (p b)
+  conv ∷ (MonadMPC m) ⇒ p a → m (p b)
 
 ---- Reflexivity (a ⊑ a)
 instance (EncDec p s) ⇒ MPCConv p s s where
@@ -85,20 +93,20 @@ instance (EncDec p s) ⇒ MPCConv p s s where
 --------------------------
 
 ---- Subtraction (a - b)
-sub ∷ (Monad m, MPCAddInv p s, MPCAdd p s) ⇒ p s → p s → m (p s)
+sub ∷ (MonadMPC m, MPCAddInv p s, MPCAdd p s) ⇒ p s → p s → m (p s)
 sub a b = do
   c ← addInv b -- c = -b
   add a c      -- a + c = a + (-b) = a - b
 
 ---- Conditionals (g ? a : b)
-cond ∷ (Monad m, MPCConv p Bool s, MPCRing p s) ⇒ p Bool → p s → p s → m (p s)
+cond ∷ (MonadMPC m, MPCConv p Bool s, MPCRing p s) ⇒ p Bool → p s → p s → m (p s)
 cond g a b = do
   c   ← conv g
   one ← mulId
   d   ← mul c a   -- d = c * a
   e   ← sub one c -- e = 1 - c
   f   ← mul e b   -- f = e * b = (1 - c) * b
-  add d f         -- d + f = (c * b) + ((1 - c) * b)
+  add d f         -- d + f = (c * a) + ((1 - c) * b)
 
 -------------------------------
 --- Derived Encrypted Types ---
@@ -143,53 +151,53 @@ instance (EncDec p a, EncDec p b) ⇒ EncDec (Value p) (a, b) where
 ---- INS: TODO: Operations
 
 -----------
---- Yao ---
+--- GMW ---
 -----------
 
 ---------------
 ---- Types ----
 ---------------
 
-type YaoBoolShare = Bool
+type GMWBoolShare = Bool
 
-type YaoWord8Share = Word8
+type GMWWord8Share = Word8
 
-data YaoWord a where
-  YaoWord8 ∷ YaoWord8Share → YaoWord Word8
+data GMWWord a where
+  GMWWord8 ∷ GMWWord8Share → GMWWord Word8
 
-data Yao a where
-  YaoBool ∷ YaoBoolShare → Yao Bool
+data GMW a where
+  GMWBool ∷ GMWBoolShare → GMW Bool
 
 -----------------------
 ---- Booleans (ℤ2) ----
 -----------------------
 
-instance EncDec Yao Bool where
-  enc b             = return $ [YaoBool b]
-  dec [(YaoBool b)] = return b
-  embed b           = return $ YaoBool b
+instance EncDec GMW Bool where
+  enc b             = return $ [GMWBool b]
+  dec [(GMWBool b)] = return b
+  embed b           = return $ GMWBool b
 
-instance MPCAddId Yao Bool where
+instance MPCAddId GMW Bool where
   addId = embed False
 
-instance MPCAddInv Yao Bool where
-  addInv (YaoBool b) = return $ YaoBool $ complement b
+instance MPCAddInv GMW Bool where
+  addInv (GMWBool b) = return $ GMWBool $ complement b
 
-instance MPCAdd Yao Bool where
-  add (YaoBool b1) (YaoBool b2) = return $ YaoBool $ b1 `xor` b2
+instance MPCAdd GMW Bool where
+  add (GMWBool b1) (GMWBool b2) = return $ GMWBool $ b1 `xor` b2
 
-instance MPCMulId Yao Bool where
+instance MPCMulId GMW Bool where
   mulId = embed True
 
-instance MPCMulInv Yao Bool where
-  mulInv _ = return $ YaoBool $ True
+instance MPCMulInv GMW Bool where
+  mulInv _ = return $ GMWBool $ True
 
-instance MPCMul Yao Bool where
-  mul (YaoBool b1) (YaoBool b2) = return $ YaoBool $ b1 .&. b2
+instance MPCMul GMW Bool where
+  mul (GMWBool b1) (GMWBool b2) = return $ GMWBool $ b1 .&. b2
 
-instance MPCGroup Yao Bool
-instance MPCRing  Yao Bool
-instance MPCField Yao Bool
+instance MPCGroup GMW Bool
+instance MPCRing  GMW Bool
+instance MPCField GMW Bool
 
 --------------------------------------
 ---- Naturals (ℤ8, ℤ16, ℤ32, ℤ64) ----
@@ -201,9 +209,9 @@ instance MPCField Yao Bool
 ---- Examples ----
 ------------------
 
-basic ∷ Monad m ⇒ m Bool
+basic ∷ MonadMPC m ⇒ m Bool
 basic = do
-  x ← enc @Yao True
+  x ← enc @GMW True
   y ← enc False
   b ← enc True
   z ← cond (head b) (head x) (head y)
